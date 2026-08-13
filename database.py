@@ -39,6 +39,17 @@ def create_database():
     connection.commit()
     connection.close()
 
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        200_000
+    )
+
+    return salt.hex() + ":" + password_hash.hex()
 
 def create_user(username, password_hash):
     connection = sqlite3.connect(DATABASE)
