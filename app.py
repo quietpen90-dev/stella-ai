@@ -442,62 +442,61 @@ class Handler(BaseHTTPRequestHandler):
                     username,
                     password_hash
                 )
+                                
+                if user_id is None:
+                    raise ValueError(
+                        "Username already exists."
+                    )
 
-        if user_id is None:
-            raise ValueError(
-                "Username already exists."
-            )
+                response_data = {
+                    "success": True,
+                    "user_id": user_id
+                }
 
-        response_data = {
-            "success": True,
-            "user_id": user_id
-        }
+                output = json.dumps(
+                    response_data
+                ).encode("utf-8")
 
-        output = json.dumps(
-            response_data
-        ).encode("utf-8")
+                self.send_response(200)
 
-        self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "application/json"
+                )
 
-        self.send_header(
-            "Content-Type",
-            "application/json"
-        )
+                self.send_header(
+                    "Content-Length",
+                    str(len(output))
+                )
 
-        self.send_header(
-            "Content-Length",
-            str(len(output))
-        )
+                self.end_headers()
 
-        self.end_headers()
+                self.wfile.write(output)
 
-        self.wfile.write(output)
+            except Exception as error:
 
-    except Exception as error:
+                output = json.dumps({
+                    "success": False,
+                    "error": str(error)
+                }).encode("utf-8")
 
-        output = json.dumps({
-            "success": False,
-            "error": str(error)
-        }).encode("utf-8")
+                self.send_response(400)
 
-        self.send_response(400)
+                self.send_header(
+                    "Content-Type",
+                    "application/json"
+                )
 
-        self.send_header(
-            "Content-Type",
-            "application/json"
-        )
+                self.send_header(
+                    "Content-Length",
+                    str(len(output))
+                )
 
-        self.send_header(
-            "Content-Length",
-            str(len(output))
-        )
+                self.end_headers()
 
-        self.end_headers()
+                self.wfile.write(output)
 
-        self.wfile.write(output)
-
-    return
-
+            return
 
 if self.path != "/chat":
 
