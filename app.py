@@ -3,7 +3,11 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from database import create_database
+from database import (
+    create_database,
+    create_user,
+    hash_password
+)
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -409,11 +413,95 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
 
-        if self.path != "/chat":
+        if self.path == "/register":
 
-            self.send_response(404)
-            self.end_headers()
-            return
+    try:
+        length = int(
+            self.headers.get("Content-Length", 0)
+        )
+
+        raw = self.rfile.read(length)
+
+        request_data = json.loads(
+            raw.decode("utf-8")
+        )
+
+        username = request_data["username"]
+        password = request_data["password"]
+
+        if not username or not password:
+            raise ValueError(
+                "Username and password are required."
+            )
+
+        password_hash = hash_password(password)
+
+        user_id = create_user(
+            username,
+            password_hash
+        )
+
+        if user_id is None:
+            raise ValueError(
+                "Username already exists."
+            )
+
+        response_data = {
+            "success": True,
+            "user_id": user_id
+        }
+
+        output = json.dumps(
+            response_data
+        ).encode("utf-8")
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-Type",
+            "application/json"
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(output))
+        )
+
+        self.end_headers()
+
+        self.wfile.write(output)
+
+    except Exception as error:
+
+        output = json.dumps({
+            "success": False,
+            "error": str(error)
+        }).encode("utf-8")
+
+        self.send_response(400)
+
+        self.send_header(
+            "Content-Type",
+            "application/json"
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(output))
+        )
+
+        self.end_headers()
+
+        self.wfile.write(output)
+
+    return
+
+
+if self.path != "/chat":
+
+    self.send_response(404)
+    self.end_headers()
+    return
 
         try:
 
