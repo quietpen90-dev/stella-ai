@@ -74,3 +74,18 @@ def create_user(username, password_hash):
 
     finally:
         connection.close()
+
+def verify_password(password, stored_password):
+    salt_hex, stored_hash_hex = stored_password.split(":")
+
+    salt = bytes.fromhex(salt_hex)
+    stored_hash = bytes.fromhex(stored_hash_hex)
+
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        200_000
+    )
+
+    return secrets.compare_digest(password_hash, stored_hash)
