@@ -38,3 +38,26 @@ def create_database():
 
     connection.commit()
     connection.close()
+
+
+def create_user(username, password_hash):
+    connection = sqlite3.connect(DATABASE)
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO users (username, password)
+            VALUES (?, ?)
+            """,
+            (username, password_hash)
+        )
+
+        connection.commit()
+        return cursor.lastrowid
+
+    except sqlite3.IntegrityError:
+        return None
+
+    finally:
+        connection.close()
