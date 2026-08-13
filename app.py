@@ -431,17 +431,17 @@ class Handler(BaseHTTPRequestHandler):
                 password = request_data["password"]
 
                 
-        if not username or not password:
-            raise ValueError(
-                "Username and password are required."
-            )
+                if not username or not password:
+                raise ValueError(
+                    "Username and password are required."
+                )
 
-        password_hash = hash_password(password)
+                 password_hash = hash_password(password)
 
-        user_id = create_user(
-            username,
-            password_hash
-        )
+                 user_id = create_user(
+                 username,
+                 password_hash
+                 )
 
         if user_id is None:
             raise ValueError(
