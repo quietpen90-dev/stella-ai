@@ -572,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
 
             self.wfile.write(output)
 
-
+create_database()
 port = int(
     os.environ.get(
         "PORT",
