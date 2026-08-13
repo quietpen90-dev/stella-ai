@@ -416,19 +416,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/register":
 
             try:
-        length = int(
-            self.headers.get("Content-Length", 0)
-        )
 
-        raw = self.rfile.read(length)
+                length = int(
+                    self.headers.get("Content-Length", 0)
+                )
 
-        request_data = json.loads(
-            raw.decode("utf-8")
-        )
+                raw = self.rfile.read(length)
 
-        username = request_data["username"]
-        password = request_data["password"]
+                request_data = json.loads(
+                    raw.decode("utf-8")
+                )
 
+                username = request_data["username"]
+                password = request_data["password"]
+
+                
         if not username or not password:
             raise ValueError(
                 "Username and password are required."
