@@ -413,7 +413,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
 
-        if self.path == "/register":
+if self.path == "/register":
 
     try:
         length = int(
