@@ -3,6 +3,31 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from database import create_database
+
+# ... your existing code ...
+
+
+create_database()
+
+port = int(
+    os.environ.get(
+        "PORT",
+        10000
+    )
+)
+
+server = HTTPServer(
+    ("0.0.0.0", port),
+    Handler
+)
+
+print(
+    "STELLA running on port",
+    port
+)
+
+server.serve_forever()
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
