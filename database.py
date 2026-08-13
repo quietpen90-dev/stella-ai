@@ -1,4 +1,6 @@
 import sqlite3
+import hashlib
+import secrets
 
 DATABASE = "stella.db"
 
