@@ -6,7 +6,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from database import (
     create_database,
     create_user,
-    hash_password
+    hash_password,
+    verify_user,
+    create_session,
+    get_user_from_session
 )
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
