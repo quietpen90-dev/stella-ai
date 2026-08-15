@@ -89,3 +89,85 @@ def verify_password(password, stored_password):
     )
 
     return secrets.compare_digest(password_hash, stored_hash)
+def verify_user(username, password):
+    connection = sqlite3.connect(DATABASE)
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, password
+        FROM users
+        WHERE username = ?
+        """,
+        (username,)
+    )
+
+    user = cursor.fetchone()
+
+    connection.close()
+
+    if user is None:
+        return None
+
+    user_id, stored_password = user
+
+    if verify_password(password, stored_password):
+        return user_id
+
+    return None
+
+
+def create_session(user_id):
+    token = secrets.token_urlsafe(32)
+
+    connection = sqlite3.connect(DATABASE)
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO sessions (token, user_id)
+        VALUES (?, ?)
+        """,
+        (token, user_id)
+    )
+
+    connection.commit()
+    connection.close()
+
+    return token
+
+
+def get_user_from_session(token):
+    if not token:
+        return None
+
+    connection = sqlite3.connect(DATABASE)
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id
+        FROM sessions
+        WHERE token = ?
+        """,
+        (token,)
+    )
+
+    result = cursor.fetchone()
+
+    connection.close()
+
+    if result is None:
+        return None
+
+    return result[0]
