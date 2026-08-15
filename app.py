@@ -1,6 +1,5 @@
 import os
 import json
-import sqlite3
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from database import (
@@ -37,20 +36,143 @@ HTML = r'''<!DOCTYPE html>
 <div id="auth"><div class="card"><div class="logo">✦ STELLA 🌸</div><div class="sub" id="sub">Create your STELLA account</div><input id="username" placeholder="Username" autocomplete="username"><input id="password" type="password" placeholder="Password" autocomplete="current-password"><button onclick="auth()" id="authBtn">Create account</button><div class="error" id="error"></div><div class="switch" onclick="toggle()" id="switch">Already have an account? Log in</div></div></div>
 <div id="app" class="hidden"><header><div class="brand">✦ STELLA</div><div class="user"><span id="welcome"></span><button id="logout" onclick="logout()">Log out</button></div></header><div id="chats"><button id="newchat" onclick="newChat()">+ New chat</button></div><div id="chat"></div><div id="inputArea"><input id="message" placeholder="Message STELLA..." autocomplete="off"><button id="send" onclick="sendMessage()">Send</button></div></div>
 <script>
-let loginMode=false,conversationId=null;
+let loginMode=false;
+let conversationId=localStorage.getItem('stella_conversation_id');
 const $=id=>document.getElementById(id);
+
+function cacheKey(id){return 'stella_messages_'+id}
+
+function saveMessages(){
+    if(!conversationId)return;
+    const messages=[...$('chat').querySelectorAll('.message')].map(m=>({
+        text:m.textContent,
+        type:m.classList.contains('user')?'user':'stella'
+    }));
+    localStorage.setItem(cacheKey(conversationId),JSON.stringify(messages));
+}
+
+function loadCachedMessages(id){
+    if(!id)return false;
+    try{
+        const messages=JSON.parse(localStorage.getItem(cacheKey(id))||'[]');
+        if(!messages.length)return false;
+        $('chat').innerHTML='';
+        messages.forEach(m=>add(m.text,m.type,false));
+        scroll();
+        return true;
+    }catch(e){return false}
+}
+
 function toggle(){loginMode=!loginMode;$('sub').textContent=loginMode?'Log in to STELLA':'Create your STELLA account';$('authBtn').textContent=loginMode?'Log in':'Create account';$('switch').textContent=loginMode?'Need an account? Create one':'Already have an account? Log in';$('error').textContent=''}
-async function auth(){let u=$('username').value.trim(),p=$('password').value;if(!u||!p){$('error').textContent='Please enter a username and password.';return}try{let r=await fetch(loginMode?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})}),d=await r.json();if(!r.ok||!d.success){$('error').textContent=d.error||'Something went wrong.';return}show(d.username||u)}catch(e){$('error').textContent='Could not connect to STELLA.'}}
-async function check(){try{let r=await fetch('/me'),d=await r.json();if(d.logged_in)show(d.username)}catch(e){}}
-async function show(u){$('auth').classList.add('hidden');$('app').classList.remove('hidden');$('welcome').textContent='Hi, '+u+'!';await loadConversations()}
-async function logout(){await fetch('/logout',{method:'POST'});location.reload()}
-async function loadConversations(){let r=await fetch('/conversations');if(!r.ok)return;let d=await r.json();let box=$('chats');box.innerHTML='<button id="newchat" onclick="newChat()">+ New chat</button>';d.conversations.forEach(c=>{let b=document.createElement('button');b.textContent=c.title||'New chat';b.onclick=()=>loadConversation(c.id);box.appendChild(b)});if(d.conversations.length&&!conversationId)await loadConversation(d.conversations[0].id);else if(!conversationId)renderWelcome()}
-async function loadConversation(id){let r=await fetch('/conversation?id='+encodeURIComponent(id));if(!r.ok)return;let d=await r.json();conversationId=id;$('chat').innerHTML='';d.messages.forEach(m=>add(m.parts[0].text,m.role==='user'?'user':'stella'));scroll()}
+
+async function auth(){
+    let u=$('username').value.trim(),p=$('password').value;
+    if(!u||!p){$('error').textContent='Please enter a username and password.';return}
+    try{
+        let r=await fetch(loginMode?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+        let d=await r.json();
+        if(!r.ok||!d.success){$('error').textContent=d.error||'Something went wrong.';return}
+        show(d.username||u)
+    }catch(e){$('error').textContent='Could not connect to STELLA.'}
+}
+
+async function check(){
+    try{
+        let r=await fetch('/me'),d=await r.json();
+        if(d.logged_in)show(d.username)
+    }catch(e){}
+}
+
+async function show(u){
+    $('auth').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    $('welcome').textContent='Hi, '+u+'!';
+    await loadConversations();
+}
+
+async function logout(){
+    await fetch('/logout',{method:'POST'});
+    localStorage.removeItem('stella_conversation_id');
+    location.reload()
+}
+
+async function loadConversations(){
+    let r=await fetch('/conversations');
+    if(!r.ok){loadCachedMessages(conversationId);return}
+    let d=await r.json();
+    let box=$('chats');
+    box.innerHTML='<button id="newchat" onclick="newChat()">+ New chat</button>';
+    d.conversations.forEach(c=>{
+        let b=document.createElement('button');
+        b.textContent=c.title||'New chat';
+        b.onclick=()=>loadConversation(c.id);
+        box.appendChild(b)
+    });
+
+    if(d.conversations.length){
+        const stored=conversationId&&d.conversations.some(c=>String(c.id)===String(conversationId));
+        const target=stored?conversationId:d.conversations[0].id;
+        await loadConversation(target);
+    }else{
+        loadCachedMessages(conversationId);
+    }
+}
+
+async function loadConversation(id){
+    let r=await fetch('/conversation?id='+encodeURIComponent(id));
+    if(!r.ok){loadCachedMessages(id);return}
+    let d=await r.json();
+    conversationId=String(id);
+    localStorage.setItem('stella_conversation_id',conversationId);
+    $('chat').innerHTML='';
+    d.messages.forEach(m=>add(m.parts[0].text,m.role==='user'?'user':'stella',false));
+    saveMessages();
+    scroll()
+}
+
 function renderWelcome(){$('chat').innerHTML='<div class="message stella">Hey! I\'m STELLA 🌸<br>Nice to meet you! What are we doing today?</div>'}
-function newChat(){conversationId=null;renderWelcome();$('message').focus()}
-async function sendMessage(){let text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';let t=add('Thinking... ✨','stella');try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){t.textContent=d.reply||'Something went wrong.';return}conversationId=d.conversation_id;t.textContent=d.reply;await loadConversations()}catch(e){t.textContent='Oops! Something went wrong. 😅'}scroll()}
-function add(text,type){let m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);scroll();return m}function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
-$('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
+
+function newChat(){
+    conversationId=null;
+    localStorage.removeItem('stella_conversation_id');
+    renderWelcome();
+    $('message').focus()
+}
+
+async function sendMessage(){
+    let text=$('message').value.trim();
+    if(!text)return;
+    add(text,'user');
+    $('message').value='';
+    let t=add('Thinking... ✨','stella');
+    try{
+        let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})});
+        let d=await r.json();
+        if(r.status===401){location.reload();return}
+        if(!r.ok){t.textContent=d.reply||'Something went wrong.';saveMessages();return}
+        conversationId=String(d.conversation_id);
+        localStorage.setItem('stella_conversation_id',conversationId);
+        t.textContent=d.reply;
+        saveMessages();
+        await loadConversations();
+    }catch(e){t.textContent='Oops! Something went wrong. 😅';saveMessages()}
+    scroll()
+}
+
+function add(text,type,save=true){
+    let m=document.createElement('div');
+    m.className='message '+type;
+    m.textContent=text;
+    $('chat').appendChild(m);
+    scroll();
+    if(save)saveMessages();
+    return m
+}
+
+function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
+$('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});
+check();
 </script></body></html>'''
 
 def body(h):
