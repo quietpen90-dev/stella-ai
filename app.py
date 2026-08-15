@@ -430,8 +430,8 @@ class Handler(BaseHTTPRequestHandler):
                 username = request_data["username"]
                 password = request_data["password"]
 
-                
                 if not username or not password:
+
                     raise ValueError(
                         "Username and password are required."
                     )
@@ -442,8 +442,9 @@ class Handler(BaseHTTPRequestHandler):
                     username,
                     password_hash
                 )
-                                
+
                 if user_id is None:
+
                     raise ValueError(
                         "Username already exists."
                     )
@@ -498,11 +499,13 @@ class Handler(BaseHTTPRequestHandler):
 
             return
 
-if self.path != "/chat":
 
-    self.send_response(404)
-    self.end_headers()
-    return
+        if self.path != "/chat":
+
+            self.send_response(404)
+            self.end_headers()
+            return
+
 
         try:
 
@@ -637,7 +640,9 @@ if self.path != "/chat":
 
             self.wfile.write(output)
 
+
 create_database()
+
 port = int(
     os.environ.get(
         "PORT",
