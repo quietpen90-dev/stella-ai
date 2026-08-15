@@ -3,6 +3,7 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from database import (
     create_database,
     create_user,
@@ -416,12 +417,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
 
+        # =========================
+        # REGISTER
+        # =========================
+
         if self.path == "/register":
 
             try:
 
                 length = int(
-                    self.headers.get("Content-Length", 0)
+                    self.headers.get(
+                        "Content-Length",
+                        0
+                    )
                 )
 
                 raw = self.rfile.read(length)
@@ -439,7 +447,9 @@ class Handler(BaseHTTPRequestHandler):
                         "Username and password are required."
                     )
 
-                password_hash = hash_password(password)
+                password_hash = hash_password(
+                    password
+                )
 
                 user_id = create_user(
                     username,
@@ -503,6 +513,113 @@ class Handler(BaseHTTPRequestHandler):
             return
 
 
+        # =========================
+        # LOGIN
+        # =========================
+
+        if self.path == "/login":
+
+            try:
+
+                length = int(
+                    self.headers.get(
+                        "Content-Length",
+                        0
+                    )
+                )
+
+                raw = self.rfile.read(length)
+
+                request_data = json.loads(
+                    raw.decode("utf-8")
+                )
+
+                username = request_data["username"]
+                password = request_data["password"]
+
+                if not username or not password:
+
+                    raise ValueError(
+                        "Username and password are required."
+                    )
+
+                user_id = verify_user(
+                    username,
+                    password
+                )
+
+                if user_id is None:
+
+                    raise ValueError(
+                        "Invalid username or password."
+                    )
+
+                session_token = create_session(
+                    user_id
+                )
+
+                response_data = {
+                    "success": True,
+                    "username": username
+                }
+
+                output = json.dumps(
+                    response_data
+                ).encode("utf-8")
+
+                self.send_response(200)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json"
+                )
+
+                self.send_header(
+                    "Set-Cookie",
+                    "stella_session="
+                    + session_token
+                    + "; HttpOnly; Path=/; SameSite=Lax"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(output))
+                )
+
+                self.end_headers()
+
+                self.wfile.write(output)
+
+            except Exception as error:
+
+                output = json.dumps({
+                    "success": False,
+                    "error": str(error)
+                }).encode("utf-8")
+
+                self.send_response(401)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(output))
+                )
+
+                self.end_headers()
+
+                self.wfile.write(output)
+
+            return
+
+
+        # =========================
+        # CHAT
+        # =========================
+
         if self.path != "/chat":
 
             self.send_response(404)
@@ -513,7 +630,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
 
             length = int(
-                self.headers.get("Content-Length", 0)
+                self.headers.get(
+                    "Content-Length",
+                    0
+                )
             )
 
             raw = self.rfile.read(length)
@@ -551,9 +671,9 @@ class Handler(BaseHTTPRequestHandler):
 
                 MODEL_URL,
 
-                data=json.dumps(body).encode(
-                    "utf-8"
-                ),
+                data=json.dumps(
+                    body
+                ).encode("utf-8"),
 
                 headers={
                     "Content-Type":
@@ -639,10 +759,19 @@ class Handler(BaseHTTPRequestHandler):
                 "application/json"
             )
 
+            self.send_header(
+                "Content-Length",
+                str(len(output))
+            )
+
             self.end_headers()
 
             self.wfile.write(output)
 
+
+# =========================
+# START SERVER
+# =========================
 
 create_database()
 
