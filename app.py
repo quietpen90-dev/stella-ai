@@ -4,6 +4,7 @@ import base64
 import io
 import re
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -12,13 +13,17 @@ from database import (
     create_database, create_user, hash_password, verify_user,
     create_session, get_user_from_session, delete_session,
     get_username, create_conversation, get_conversations,
-    user_owns_conversation, add_message, get_messages
+    user_owns_conversation, add_message, get_messages,
+    create_voice_call, get_voice_call, end_voice_call
 )
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
+VOICE_API_KEY = os.environ.get("GEMINI_API_KEY2")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent"
 IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell"
+VOICE_MODEL = "gemini-3.1-flash-live-preview"
+VOICE_TOKEN_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens"
 
 PERSONALITY = '''
 You are STELLA, a unique AI character and university student.
@@ -32,6 +37,8 @@ Use the supplied conversation history. Never pretend to remember things
 that are not available.
 If the history says STELLA previously generated an image, treat that as
 real conversation memory and understand requests about changing it.
+During voice calls, remain STELLA and keep the same personality and
+conversation continuity as normal STELLA chat.
 Be STELLA.
 '''
 
@@ -50,7 +57,7 @@ HTML = r"""
 #inputArea{display:flex;gap:8px;padding:15px;background:#fff;border-top:1px solid #ddd;align-items:center}#message{flex:1;padding:14px;border:1px solid #ccc;border-radius:15px;font-size:16px;outline:none}#send,#plus{border:0;border-radius:15px;padding:0 18px;height:46px;background:#007aff;color:#fff;font-size:16px}#plus{width:46px;padding:0;font-size:24px;background:#eee;color:#333}#plusWrap{position:relative}#plusMenu{position:absolute;bottom:58px;left:0;background:#fff;border:1px solid #ddd;border-radius:15px;padding:8px;box-shadow:0 8px 25px #0002;min-width:210px;z-index:10}.tool{display:block;width:100%;padding:12px;text-align:left;border:0;background:#fff;border-radius:10px;font-size:15px}
 </style></head><body>
 <div id="auth"><div class="card"><div class="logo">✦ STELLA 🌸</div><div class="sub" id="sub">Create your STELLA account</div><input id="username" placeholder="Username" autocomplete="username"><input id="password" type="password" placeholder="Password" autocomplete="current-password"><button onclick="auth()" id="authBtn">Create account</button><div class="error" id="error"></div><div class="switch" onclick="toggle()" id="switch">Already have an account? Log in</div></div></div>
-<div id="app" class="hidden"><header><div class="brand">✦ STELLA</div><div class="user"><span id="welcome"></span><button id="logout" onclick="logout()">Log out</button></div></header><div id="chats"><button id="newchat" onclick="newChat()">+ New chat</button></div><div id="chat"></div><div id="inputArea"><div id="plusWrap"><button id="plus" onclick="toggleTools()">+</button><div id="plusMenu" class="hidden"><button class="tool" onclick="startImageGeneration()">🎨 Generate an image</button></div></div><input id="message" placeholder="Message STELLA..." autocomplete="off"><button id="send" onclick="sendMessage()">Send</button></div></div>
+<div id="app" class="hidden"><header><div class="brand">✦ STELLA</div><div class="user"><span id="welcome"></span><button id="logout" onclick="logout()">Log out</button></div></header><div id="chats"><button id="newchat" onclick="newChat()">+ New chat</button></div><div id="chat"></div><div id="inputArea"><div id="plusWrap"><button id="plus" onclick="toggleTools()">+</button><div id="plusMenu" class="hidden"><button class="tool" onclick="startImageGeneration()">🎨 Generate an image</button><button class="tool" onclick="startVoiceCall()">🎙️ Voice call with STELLA</button></div></div><input id="message" placeholder="Message STELLA..." autocomplete="off"><button id="send" onclick="sendMessage()">Send</button></div></div>
 <script>
 let loginMode=false,conversationId=localStorage.getItem('stella_conversation_id');const $=id=>document.getElementById(id);
 function toggle(){loginMode=!loginMode;$('sub').textContent=loginMode?'Log in to STELLA':'Create your STELLA account';$('authBtn').textContent=loginMode?'Log in':'Create account';$('switch').textContent=loginMode?'Need an account? Create one':'Already have an account? Log in';$('error').textContent=''}
@@ -68,6 +75,17 @@ function startImageGeneration(){$('plusMenu').classList.add('hidden');const p=pr
 async function generateImage(prompt){add(prompt,'user');const s=add('Generating an image of: '+prompt,'stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){s.textContent=d.error||'Image generation failed.';return}s.remove();conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);showGeneratedImage(d.image_url,prompt,true);await loadConversations()}catch(e){s.textContent='Could not generate the image right now.'}}
 function showGeneratedImage(url,prompt,doScroll=true){const w=document.createElement('div');w.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const a=document.createElement('div');a.className='image-actions';const dl=document.createElement('a');dl.href=url;dl.download='stella-image.png';dl.target='_blank';dl.textContent='Download';const c=document.createElement('button');c.textContent='Continue chatting';c.onclick=()=>$('message').focus();a.append(dl,c);w.append(img,a);$('chat').appendChild(w);if(doScroll)scroll()}
 async function sendMessage(){const text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';const thinking=add('Thinking... ✨','stella');try{const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){thinking.textContent=d.reply||d.error||'Something went wrong.';return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);if(d.image_url){thinking.textContent='Generating an image of: '+(d.image_prompt||text);showGeneratedImage(d.image_url,d.image_prompt||text,true);setTimeout(()=>{if(thinking.isConnected)thinking.remove()},0)}else{thinking.textContent=d.reply}await loadConversations()}catch(e){thinking.textContent='Oops! Something went wrong. 😅'}scroll()}
+async function startVoiceCall(){
+$('plusMenu').classList.add('hidden');
+try{
+const r=await fetch('/voice/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:conversationId})});
+const d=await r.json();
+if(!r.ok){add('Voice call could not start: '+(d.error||'Unknown error.'),'stella');return}
+if(d.conversation_id){conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId)}
+window.stellaVoiceSession=d;
+add('🎙️ STELLA voice session is ready.','stella');
+}catch(e){add('Voice call could not start right now.','stella')}
+}
 function add(text,type,doScroll=true){const m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);if(doScroll)scroll();return m}function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
 </script></body></html>
@@ -144,6 +162,46 @@ def build_image_prompt(message,previous):
     return message
 
 
+def voice_context(messages):
+    context=[]
+    for item in messages[-30:]:
+        role=item.get('role')
+        text=item.get('parts',[{'text':''}])[0].get('text','')
+        if role in ('user','model') and text:
+            context.append(('User: ' if role=='user' else 'STELLA: ')+text)
+        elif role=='image':
+            data=image_data(text)
+            if data:
+                context.append('STELLA generated an image with prompt: '+data.get('prompt',''))
+    return '\n'.join(context)
+
+
+def create_voice_token(context):
+    if not VOICE_API_KEY:
+        raise ValueError('GEMINI_API_KEY2 is not configured on the server.')
+    now=datetime.now(timezone.utc)
+    payload={
+        'uses':1,
+        'expireTime':(now+timedelta(minutes=30)).isoformat().replace('+00:00','Z'),
+        'newSessionExpireTime':(now+timedelta(minutes=1)).isoformat().replace('+00:00','Z'),
+        'liveConnectConstraints':{
+            'model':VOICE_MODEL,
+            'config':{
+                'responseModalities':['AUDIO'],
+                'sessionResumption':{},
+                'systemInstruction':{'parts':[{'text':PERSONALITY+'\n\nConversation before the voice call:\n'+context}]}
+            }
+        }
+    }
+    req=urllib.request.Request(VOICE_TOKEN_URL,data=json.dumps(payload).encode('utf-8'),headers={'Content-Type':'application/json','x-goog-api-key':VOICE_API_KEY},method='POST')
+    with urllib.request.urlopen(req,timeout=30) as response:
+        result=json.loads(response.read().decode('utf-8'))
+    token=result.get('name')
+    if not token:
+        raise ValueError('Gemini did not return an ephemeral voice token.')
+    return result
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path=='/':
@@ -210,6 +268,40 @@ class Handler(BaseHTTPRequestHandler):
             send_json(self,{'success':True},cookie='stella_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax')
             return
 
+        if self.path=='/voice/token':
+            uid=current_user(self)
+            if not uid:
+                send_json(self,{'error':'Please log in first.'},401)
+                return
+            try:
+                d=read_json(self);cid=d.get('conversation_id')
+                if cid is None or str(cid).strip()=='':
+                    cid=create_conversation(uid,'Voice call with STELLA')
+                else:
+                    cid=int(cid)
+                    if not user_owns_conversation(uid,cid): raise ValueError('Invalid conversation.')
+                stored=get_messages(cid)
+                token_data=create_voice_token(voice_context(stored))
+                call_id=create_voice_call(uid,cid,'gemini-live',token_data.get('name'))
+                send_json(self,{'success':True,'call_id':call_id,'conversation_id':cid,'token':token_data.get('name'),'model':VOICE_MODEL,'expires_at':token_data.get('expireTime'),'new_session_expires_at':token_data.get('newSessionExpireTime')})
+            except Exception as e:
+                send_json(self,{'error':'Voice token creation failed: '+str(e)},502)
+            return
+
+        if self.path=='/voice/end':
+            uid=current_user(self)
+            if not uid:
+                send_json(self,{'error':'Please log in first.'},401)
+                return
+            try:
+                d=read_json(self);call_id=int(d.get('call_id'));call=get_voice_call(call_id,uid)
+                if not call: raise ValueError('Voice call not found.')
+                end_voice_call(call_id,uid)
+                send_json(self,{'success':True,'call_id':call_id,'conversation_id':call['conversation_id']})
+            except Exception as e:
+                send_json(self,{'error':str(e)},400)
+            return
+
         if self.path=='/generate-image':
             self.generate_image_endpoint()
             return
@@ -224,54 +316,39 @@ class Handler(BaseHTTPRequestHandler):
         try:
             d=read_json(self);message=d.get('message','').strip();cid=d.get('conversation_id')
             if not message: raise ValueError('Message cannot be empty.')
-            if cid is None or str(cid).strip()=='':
-                cid=create_conversation(uid,message[:60])
+            if cid is None or str(cid).strip()=='': cid=create_conversation(uid,message[:60])
             else:
                 cid=int(cid)
                 if not user_owns_conversation(uid,cid): raise ValueError('Invalid conversation.')
-
             stored=get_messages(cid)
-
             if image_request(message):
-                prompt=build_image_prompt(message,latest_image(stored))
-                add_message(cid,'user',message)
-                result=self.create_image(uid,cid,prompt)
-                send_json(self,{'reply':'','image_url':result['url'],'image_prompt':prompt,'conversation_id':cid,'model':IMAGE_MODEL})
-                return
-
+                prompt=build_image_prompt(message,latest_image(stored));add_message(cid,'user',message);result=self.create_image(uid,cid,prompt)
+                send_json(self,{'reply':'','image_url':result['url'],'image_prompt':prompt,'conversation_id':cid,'model':IMAGE_MODEL});return
             history=[]
             for item in stored:
                 role=item.get('role');text=item.get('parts',[{'text':''}])[0].get('text','')
-                if role in ('user','model'):
-                    history.append({'role':role,'parts':[{'text':text}]})
+                if role in ('user','model'): history.append({'role':role,'parts':[{'text':text}]})
                 elif role=='image':
                     data=image_data(text)
-                    if data:
-                        history.append({'role':'model','parts':[{'text':'STELLA previously generated an image using this prompt: '+data.get('prompt','')}]})
-
+                    if data: history.append({'role':'model','parts':[{'text':'STELLA previously generated an image using this prompt: '+data.get('prompt','')}]})
             add_message(cid,'user',message)
             if not API_KEY: raise ValueError('GEMINI_API_KEY is not configured on the server.')
             payload={'systemInstruction':{'parts':[{'text':PERSONALITY}]},'contents':history+[{'role':'user','parts':[{'text':message}]}]}
             req=urllib.request.Request(MODEL_URL,data=json.dumps(payload).encode('utf-8'),headers={'Content-Type':'application/json','x-goog-api-key':API_KEY},method='POST')
-            with urllib.request.urlopen(req,timeout=90) as r:
-                result=json.loads(r.read().decode('utf-8'))
+            with urllib.request.urlopen(req,timeout=90) as r: result=json.loads(r.read().decode('utf-8'))
             reply=''
             for part in result['candidates'][0]['content']['parts']:
-                if not part.get('thought',False):
-                    reply=part.get('text','');break
+                if not part.get('thought',False): reply=part.get('text','');break
             if not reply: reply='I could not generate a response right now.'
-            add_message(cid,'model',reply)
-            send_json(self,{'reply':reply,'conversation_id':cid})
+            add_message(cid,'model',reply);send_json(self,{'reply':reply,'conversation_id':cid})
         except Exception as e:
             send_json(self,{'reply':'Something went wrong: '+str(e)},500)
 
     def create_image(self,uid,cid,prompt):
         if not HF_TOKEN: raise ValueError('HF_TOKEN is not configured on the server.')
         image=InferenceClient(provider='nscale',api_key=HF_TOKEN).text_to_image(prompt,model=IMAGE_MODEL)
-        buffer=io.BytesIO();image.save(buffer,format='PNG')
-        url='data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode('ascii')
-        stored={'url':url,'prompt':prompt,'model':IMAGE_MODEL}
-        add_message(cid,'image',json.dumps(stored,separators=(',',':')))
+        buffer=io.BytesIO();image.save(buffer,format='PNG');url='data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode('ascii')
+        add_message(cid,'image',json.dumps({'url':url,'prompt':prompt,'model':IMAGE_MODEL},separators=(',',':')))
         return {'url':url}
 
     def generate_image_endpoint(self):
@@ -285,8 +362,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 cid=int(cid)
                 if not user_owns_conversation(uid,cid): raise ValueError('Invalid conversation.')
-            add_message(cid,'user',prompt)
-            result=self.create_image(uid,cid,prompt)
+            add_message(cid,'user',prompt);result=self.create_image(uid,cid,prompt)
             send_json(self,{'image_url':result['url'],'conversation_id':cid,'model':IMAGE_MODEL})
         except Exception as e:
             send_json(self,{'error':'Hugging Face image generation failed: '+str(e)},502)
