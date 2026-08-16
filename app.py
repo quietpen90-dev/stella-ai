@@ -65,9 +65,9 @@ function renderWelcome(){$('chat').innerHTML='<div class="message stella">Hey! I
 function newChat(){conversationId=null;localStorage.removeItem('stella_conversation_id');renderWelcome();$('message').focus()}
 function toggleTools(){$('plusMenu').classList.toggle('hidden')}
 function startImageGeneration(){$('plusMenu').classList.add('hidden');const p=prompt('What image should STELLA generate?');if(p&&p.trim())generateImage(p.trim())}
-async function generateImage(prompt){add('Generate an image: '+prompt,'user');const s=add('Creating your image... 🎨','stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){s.textContent=d.error||'Image generation failed.';return}s.remove();conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);showGeneratedImage(d.image_url,prompt,true);await loadConversations()}catch(e){s.textContent='Could not generate the image right now.'}}
+async function generateImage(prompt){add(prompt,'user');const s=add('Generating an image of: '+prompt,'stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){s.textContent=d.error||'Image generation failed.';return}s.remove();conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);showGeneratedImage(d.image_url,prompt,true);await loadConversations()}catch(e){s.textContent='Could not generate the image right now.'}}
 function showGeneratedImage(url,prompt,doScroll=true){const w=document.createElement('div');w.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const a=document.createElement('div');a.className='image-actions';const dl=document.createElement('a');dl.href=url;dl.download='stella-image.png';dl.target='_blank';dl.textContent='Download';const c=document.createElement('button');c.textContent='Continue chatting';c.onclick=()=>$('message').focus();a.append(dl,c);w.append(img,a);$('chat').appendChild(w);if(doScroll)scroll()}
-async function sendMessage(){const text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';const thinking=add('Thinking... ✨','stella');try{const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){thinking.textContent=d.reply||d.error||'Something went wrong.';return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);if(d.image_url){thinking.remove();showGeneratedImage(d.image_url,d.image_prompt||text,true)}else{thinking.textContent=d.reply}await loadConversations()}catch(e){thinking.textContent='Oops! Something went wrong. 😅'}scroll()}
+async function sendMessage(){const text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';const thinking=add('Thinking... ✨','stella');try{const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})}),d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){thinking.textContent=d.reply||d.error||'Something went wrong.';return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);if(d.image_url){thinking.textContent='Generating an image of: '+(d.image_prompt||text);showGeneratedImage(d.image_url,d.image_prompt||text,true);setTimeout(()=>{if(thinking.isConnected)thinking.remove()},0)}else{thinking.textContent=d.reply}await loadConversations()}catch(e){thinking.textContent='Oops! Something went wrong. 😅'}scroll()}
 function add(text,type,doScroll=true){const m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);if(doScroll)scroll();return m}function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
 </script></body></html>
@@ -234,8 +234,6 @@ class Handler(BaseHTTPRequestHandler):
 
             if image_request(message):
                 prompt=build_image_prompt(message,latest_image(stored))
-                # Store the user's image-generation request before generating the image.
-                # This keeps the request visible after the conversation is reloaded.
                 add_message(cid,'user',message)
                 result=self.create_image(uid,cid,prompt)
                 send_json(self,{'reply':'','image_url':result['url'],'image_prompt':prompt,'conversation_id':cid,'model':IMAGE_MODEL})
@@ -287,7 +285,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 cid=int(cid)
                 if not user_owns_conversation(uid,cid): raise ValueError('Invalid conversation.')
-            add_message(cid,'user','Generate an image: '+prompt)
+            add_message(cid,'user',prompt)
             result=self.create_image(uid,cid,prompt)
             send_json(self,{'image_url':result['url'],'conversation_id':cid,'model':IMAGE_MODEL})
         except Exception as e:
