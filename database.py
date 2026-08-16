@@ -55,6 +55,21 @@ def create_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS voice_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            provider TEXT,
+            provider_session_id TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+    """)
+
     connection.commit()
     connection.close()
 
@@ -134,7 +149,6 @@ def create_session(user_id):
 def get_user_from_session(token):
     if not token:
         return None
-
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute(
@@ -259,6 +273,64 @@ def delete_conversation(user_id, conversation_id):
     connection.execute(
         "DELETE FROM conversations WHERE id = ? AND user_id = ?",
         (conversation_id, user_id)
+    )
+    connection.commit()
+    connection.close()
+
+
+def create_voice_call(user_id, conversation_id, provider=None, provider_session_id=None):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        INSERT INTO voice_calls
+        (user_id, conversation_id, provider, provider_session_id, status)
+        VALUES (?, ?, ?, ?, 'active')
+        """,
+        (user_id, conversation_id, provider, provider_session_id)
+    )
+    connection.commit()
+    call_id = cursor.lastrowid
+    connection.close()
+    return call_id
+
+
+def get_voice_call(call_id, user_id):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT id, conversation_id, provider, provider_session_id, status,
+               started_at, ended_at
+        FROM voice_calls
+        WHERE id = ? AND user_id = ?
+        """,
+        (call_id, user_id)
+    )
+    row = cursor.fetchone()
+    connection.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "conversation_id": row[1],
+        "provider": row[2],
+        "provider_session_id": row[3],
+        "status": row[4],
+        "started_at": row[5],
+        "ended_at": row[6]
+    }
+
+
+def end_voice_call(call_id, user_id):
+    connection = get_connection()
+    connection.execute(
+        """
+        UPDATE voice_calls
+        SET status = 'ended', ended_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+        """,
+        (call_id, user_id)
     )
     connection.commit()
     connection.close()
