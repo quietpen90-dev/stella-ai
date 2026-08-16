@@ -234,6 +234,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if image_request(message):
                 prompt=build_image_prompt(message,latest_image(stored))
+                # Store the user's image-generation request before generating the image.
+                # This keeps the request visible after the conversation is reloaded.
+                add_message(cid,'user',message)
                 result=self.create_image(uid,cid,prompt)
                 send_json(self,{'reply':'','image_url':result['url'],'image_prompt':prompt,'conversation_id':cid,'model':IMAGE_MODEL})
                 return
