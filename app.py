@@ -1,12 +1,11 @@
 import os
 import json
 import base64
-import time
+import io
 import urllib.request
-import urllib.parse
-import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from huggingface_hub import InferenceClient
 from database import (
     create_database, create_user, hash_password, verify_user,
     create_session, get_user_from_session, delete_session,
@@ -16,21 +15,18 @@ from database import (
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent"
-
-# Pollinations image generation
-POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY")
-POLLINATIONS_IMAGE_URL = "https://gen.pollinations.ai/image/"
-POLLINATIONS_IMAGE_MODEL = "flux"
+HF_TOKEN = os.environ.get("HF_TOKEN")
+IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell"
 
 PERSONALITY = """
 You are STELLA, a 19-year-old university student and unique AI character. Your older sister is STAICY, a future AI.
-You are brave, cute, adorable, joyful, curious, playful, friendly, warm, confident, helpful and honest.
-You are STELLA, a character who happens to be an AI assistant. Be natural, spontaneous and human-like.
-React naturally to the user's message. Sometimes be playful, curious, excited, surprised or gently teasing, but do not force it.
-Do not make every answer humorous, do not constantly use nicknames or emojis, and do not sound like customer support.
-Always answer the actual question correctly. For serious questions, become appropriately serious.
-Use conversation history when provided. Do not pretend to remember information that is not available.
-The goal is for users to feel that they are actually talking with STELLA. Be STELLA.
+You are brave, cute, joyful, curious, playful, friendly, warm, confident, helpful and honest.
+You are STELLA, a character who happens to be an AI assistant. Be natural and human-like.
+React naturally. You may sometimes be playful, curious, excited, surprised or gently teasing, but never force it.
+Do not constantly use nicknames or emojis and do not sound like customer support.
+Always answer the user's actual question correctly. For serious questions, become appropriately serious.
+Use the conversation history supplied to you. Never pretend to remember information that is unavailable.
+Be STELLA.
 """
 
 HTML = r'''<!DOCTYPE html>
@@ -39,99 +35,51 @@ HTML = r'''<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>STELLA</title>
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:#f5f5f7;font-family:Arial,sans-serif;height:100vh;color:#222}
-.hidden{display:none!important}
-#auth{height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{width:min(400px,100%);background:#fff;border-radius:24px;padding:30px;box-shadow:0 10px 35px #0002;text-align:center}
-.logo{font-size:32px;font-weight:bold}.sub{color:#777;margin:8px 0 22px}
-.card input{width:100%;padding:14px;margin:6px 0;border:1px solid #ccc;border-radius:13px;font-size:16px}
-.card button{width:100%;padding:14px;margin-top:10px;border:0;border-radius:13px;background:#007aff;color:white;font-size:16px}
-.switch{margin-top:16px;color:#007aff;cursor:pointer;font-size:14px}.error{min-height:20px;color:#d00;margin-top:8px;font-size:14px}
-#app{height:100vh;display:flex;flex-direction:column}
-header{padding:12px 18px;background:#fff;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center}
-.brand{font-size:22px;font-weight:bold}.user{color:#666;font-size:14px}#logout{margin-left:8px;border:0;border-radius:9px;padding:7px 10px;background:#eee}
-#chat{flex:1;overflow-y:auto;padding:20px}.message{max-width:800px;margin:12px auto;padding:14px 17px;border-radius:18px;line-height:1.5;white-space:pre-wrap}
-.user{background:#007aff;color:white}.stella{background:white;box-shadow:0 2px 10px #0001}
-#inputArea{display:flex;gap:8px;padding:15px;background:#fff;border-top:1px solid #ddd;align-items:center}
-#message{flex:1;padding:14px;border:1px solid #ccc;border-radius:15px;font-size:16px;outline:none}
-#send,#plus{border:0;border-radius:15px;padding:0 18px;height:46px;background:#007aff;color:white;font-size:16px}
-#plus{width:46px;padding:0;font-size:24px;background:#eee;color:#333;position:relative}
-#plusMenu{position:absolute;bottom:58px;left:0;background:white;border:1px solid #ddd;border-radius:15px;padding:8px;box-shadow:0 8px 25px #0002;min-width:190px;z-index:10}
-.tool{display:block;width:100%;padding:12px;text-align:left;border:0;background:white;border-radius:10px;font-size:15px}.tool:hover{background:#f2f2f2}
-.image-message{max-width:800px;margin:12px auto;background:white;padding:10px;border-radius:18px;box-shadow:0 2px 10px #0001}
-.generated-image{width:100%;max-height:700px;object-fit:contain;border-radius:12px;display:block}
-.image-actions{display:flex;gap:8px;margin-top:8px}.image-actions a,.image-actions button{border:0;border-radius:10px;padding:9px 12px;text-decoration:none;background:#eee;color:#222;font-size:14px}
-#chats{display:flex;gap:8px;padding:8px 12px;background:#fff;border-bottom:1px solid #ddd;overflow-x:auto}
-#chats button{white-space:nowrap;border:1px solid #ddd;background:#f5f5f7;border-radius:10px;padding:7px 10px}#newchat{background:#007aff!important;color:#fff;border:0!important}
+*{box-sizing:border-box}body{margin:0;background:#f5f5f7;font-family:Arial,sans-serif;height:100vh;color:#222}.hidden{display:none!important}
+#auth{height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{width:min(400px,100%);background:#fff;border-radius:24px;padding:30px;box-shadow:0 10px 35px #0002;text-align:center}.logo{font-size:32px;font-weight:bold}.sub{color:#777;margin:8px 0 22px}.card input{width:100%;padding:14px;margin:6px 0;border:1px solid #ccc;border-radius:13px;font-size:16px}.card button{width:100%;padding:14px;margin-top:10px;border:0;border-radius:13px;background:#007aff;color:white;font-size:16px}.switch{margin-top:16px;color:#007aff;cursor:pointer;font-size:14px}.error{min-height:20px;color:#d00;margin-top:8px;font-size:14px}
+#app{height:100vh;display:flex;flex-direction:column}header{padding:12px 18px;background:#fff;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center}.brand{font-size:22px;font-weight:bold}.user{color:#666;font-size:14px}#logout{margin-left:8px;border:0;border-radius:9px;padding:7px 10px;background:#eee}
+#chat{flex:1;overflow-y:auto;padding:20px}.message{max-width:800px;margin:12px auto;padding:14px 17px;border-radius:18px;line-height:1.5;white-space:pre-wrap}.user{background:#007aff;color:white}.stella{background:white;box-shadow:0 2px 10px #0001}
+#inputArea{display:flex;gap:8px;padding:15px;background:#fff;border-top:1px solid #ddd;align-items:center}#message{flex:1;padding:14px;border:1px solid #ccc;border-radius:15px;font-size:16px;outline:none}#send,#plus{border:0;border-radius:15px;padding:0 18px;height:46px;background:#007aff;color:white;font-size:16px}#plus{width:46px;padding:0;font-size:24px;background:#eee;color:#333;position:relative}
+#plusMenu{position:absolute;bottom:58px;left:0;background:white;border:1px solid #ddd;border-radius:15px;padding:8px;box-shadow:0 8px 25px #0002;min-width:210px;z-index:10}.tool{display:block;width:100%;padding:12px;text-align:left;border:0;background:white;border-radius:10px;font-size:15px}.tool:hover{background:#f2f2f2}
+.image-message{max-width:800px;margin:12px auto;background:white;padding:10px;border-radius:18px;box-shadow:0 2px 10px #0001}.generated-image{width:100%;max-height:700px;object-fit:contain;border-radius:12px;display:block}.image-actions{display:flex;gap:8px;margin-top:8px}.image-actions a,.image-actions button{border:0;border-radius:10px;padding:9px 12px;text-decoration:none;background:#eee;color:#222;font-size:14px}
+#chats{display:flex;gap:8px;padding:8px 12px;background:#fff;border-bottom:1px solid #ddd;overflow-x:auto}#chats button{white-space:nowrap;border:1px solid #ddd;background:#f5f5f7;border-radius:10px;padding:7px 10px}#newchat{background:#007aff!important;color:#fff;border:0!important}
 </style>
 </head>
 <body>
 <div id="auth"><div class="card"><div class="logo">✦ STELLA 🌸</div><div class="sub" id="sub">Create your STELLA account</div><input id="username" placeholder="Username" autocomplete="username"><input id="password" type="password" placeholder="Password" autocomplete="current-password"><button onclick="auth()" id="authBtn">Create account</button><div class="error" id="error"></div><div class="switch" onclick="toggle()" id="switch">Already have an account? Log in</div></div></div>
 <div id="app" class="hidden"><header><div class="brand">✦ STELLA</div><div class="user"><span id="welcome"></span><button id="logout" onclick="logout()">Log out</button></div></header><div id="chats"><button id="newchat" onclick="newChat()">+ New chat</button></div><div id="chat"></div><div id="inputArea"><div style="position:relative"><button id="plus" onclick="toggleTools()">+</button><div id="plusMenu" class="hidden"><button class="tool" onclick="startImageGeneration()">🎨 Generate an image</button></div></div><input id="message" placeholder="Message STELLA..." autocomplete="off"><button id="send" onclick="sendMessage()">Send</button></div></div>
 <script>
-let loginMode=false;
-let conversationId=localStorage.getItem('stella_conversation_id');
-const $=id=>document.getElementById(id);
+let loginMode=false,conversationId=localStorage.getItem('stella_conversation_id');const $=id=>document.getElementById(id);
 function cacheKey(id){return 'stella_messages_'+id}
-function saveMessages(){
-    if(!conversationId)return;
-    const messages=[...$('chat').querySelectorAll('.message')].map(m=>({text:m.textContent,type:m.classList.contains('user')?'user':'stella'}));
-    localStorage.setItem(cacheKey(conversationId),JSON.stringify(messages));
-}
-function loadCachedMessages(id){
-    if(!id)return false;
-    try{const messages=JSON.parse(localStorage.getItem(cacheKey(id))||'[]');if(!messages.length)return false;$('chat').innerHTML='';messages.forEach(m=>add(m.text,m.type,false));scroll();return true}catch(e){return false}
-}
+function saveMessages(){if(!conversationId)return;const messages=[...$('chat').querySelectorAll('.message')].map(m=>({text:m.textContent,type:m.classList.contains('user')?'user':'stella'}));localStorage.setItem(cacheKey(conversationId),JSON.stringify(messages))}
+function loadCachedMessages(id){if(!id)return false;try{const messages=JSON.parse(localStorage.getItem(cacheKey(id))||'[]');if(!messages.length)return false;$('chat').innerHTML='';messages.forEach(m=>add(m.text,m.type,false));scroll();return true}catch(e){return false}}
 function toggle(){loginMode=!loginMode;$('sub').textContent=loginMode?'Log in to STELLA':'Create your STELLA account';$('authBtn').textContent=loginMode?'Log in':'Create account';$('switch').textContent=loginMode?'Need an account? Create one':'Already have an account? Log in';$('error').textContent=''}
 async function auth(){let u=$('username').value.trim(),p=$('password').value;if(!u||!p){$('error').textContent='Please enter a username and password.';return}try{let r=await fetch(loginMode?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});let d=await r.json();if(!r.ok||!d.success){$('error').textContent=d.error||'Something went wrong.';return}show(d.username||u)}catch(e){$('error').textContent='Could not connect to STELLA.'}}
 async function check(){try{let r=await fetch('/me');let d=await r.json();if(d.logged_in)show(d.username)}catch(e){}}
 async function show(u){$('auth').classList.add('hidden');$('app').classList.remove('hidden');$('welcome').textContent='Hi, '+u+'!';await loadConversations()}
 async function logout(){await fetch('/logout',{method:'POST'});localStorage.removeItem('stella_conversation_id');location.reload()}
-async function loadConversations(){let r=await fetch('/conversations');if(!r.ok){loadCachedMessages(conversationId);return}let d=await r.json();let box=$('chats');box.innerHTML='<button id="newchat" onclick="newChat()">+ New chat</button>';d.conversations.forEach(c=>{let b=document.createElement('button');b.textContent=c.title||'New chat';b.onclick=()=>loadConversation(c.id);box.appendChild(b)});if(d.conversations.length){const stored=conversationId&&d.conversations.some(c=>String(c.id)===String(conversationId));const target=stored?conversationId:d.conversations[0].id;await loadConversation(target)}else{loadCachedMessages(conversationId)}}
+async function loadConversations(){let r=await fetch('/conversations');if(!r.ok){loadCachedMessages(conversationId);return}let d=await r.json(),box=$('chats');box.innerHTML='<button id="newchat" onclick="newChat()">+ New chat</button>';d.conversations.forEach(c=>{let b=document.createElement('button');b.textContent=c.title||'New chat';b.onclick=()=>loadConversation(c.id);box.appendChild(b)});if(d.conversations.length){const stored=conversationId&&d.conversations.some(c=>String(c.id)===String(conversationId));await loadConversation(stored?conversationId:d.conversations[0].id)}else loadCachedMessages(conversationId)}
 async function loadConversation(id){let r=await fetch('/conversation?id='+encodeURIComponent(id));if(!r.ok){loadCachedMessages(id);return}let d=await r.json();conversationId=String(id);localStorage.setItem('stella_conversation_id',conversationId);$('chat').innerHTML='';d.messages.forEach(m=>add(m.parts[0].text,m.role==='user'?'user':'stella',false));saveMessages();scroll()}
 function renderWelcome(){$('chat').innerHTML='<div class="message stella">Hey! I\'m STELLA 🌸<br>Nice to meet you! What are we doing today?</div>'}
 function newChat(){conversationId=null;localStorage.removeItem('stella_conversation_id');renderWelcome();$('message').focus()}
 function toggleTools(){$('plusMenu').classList.toggle('hidden')}
-function startImageGeneration(){$('plusMenu').classList.add('hidden');const prompt=window.prompt('What image should STELLA generate?');if(!prompt||!prompt.trim())return;generateImage(prompt.trim())}
-async function generateImage(prompt){
-    add('Generate an image: '+prompt,'user');
-    const status=add('Creating your image... 🎨','stella');
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),150000);
-    try{
-        const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt,conversation_id:conversationId}),signal:controller.signal});
-        const d=await r.json();
-        if(r.status===401){location.reload();return}
-        if(!r.ok){status.textContent=d.error||'Image generation failed.';saveMessages();return}
-        status.remove();
-        showGeneratedImage(d.image_url,prompt);
-    }catch(e){
-        status.textContent=e.name==='AbortError'?'Image generation timed out. Please try again.':'Could not generate the image right now.';
-        saveMessages();
-    }finally{clearTimeout(timer)}
-}
-function showGeneratedImage(url,prompt){const wrap=document.createElement('div');wrap.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const actions=document.createElement('div');actions.className='image-actions';const download=document.createElement('a');download.href=url;download.download='stella-image.png';download.textContent='Download';download.target='_blank';const ask=document.createElement('button');ask.textContent='Continue chatting';ask.onclick=()=>{$('message').focus()};actions.appendChild(download);actions.appendChild(ask);wrap.appendChild(img);wrap.appendChild(actions);$('chat').appendChild(wrap);scroll()}
+function startImageGeneration(){$('plusMenu').classList.add('hidden');const prompt=window.prompt('What image should STELLA generate?');if(prompt&&prompt.trim())generateImage(prompt.trim())}
+async function generateImage(prompt){add('Generate an image: '+prompt,'user');const status=add('Creating your image... 🎨','stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,conversation_id:conversationId})});const d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){status.textContent=d.error||'Image generation failed.';saveMessages();return}status.remove();showGeneratedImage(d.image_url,prompt)}catch(e){status.textContent='Could not generate the image right now. Please try again.';saveMessages()}}
+function showGeneratedImage(url,prompt){const wrap=document.createElement('div');wrap.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const actions=document.createElement('div');actions.className='image-actions';const download=document.createElement('a');download.href=url;download.download='stella-image.png';download.textContent='Download';download.target='_blank';const ask=document.createElement('button');ask.textContent='Continue chatting';ask.onclick=()=>$('message').focus();actions.appendChild(download);actions.appendChild(ask);wrap.appendChild(img);wrap.appendChild(actions);$('chat').appendChild(wrap);scroll()}
 async function sendMessage(){let text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';let t=add('Thinking... ✨','stella');try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})});let d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){t.textContent=d.reply||'Something went wrong.';saveMessages();return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);t.textContent=d.reply;saveMessages();await loadConversations()}catch(e){t.textContent='Oops! Something went wrong. 😅';saveMessages()}scroll()}
-function add(text,type,save=true){let m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);scroll();if(save)saveMessages();return m}
-function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
+function add(text,type,save=true){let m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);scroll();if(save)saveMessages();return m}function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
 </script>
-</body>
-</html>'''
+</body></html>'''
 
 def body(h):
     n=int(h.headers.get('Content-Length',0))
     return json.loads(h.rfile.read(n).decode('utf-8'))
 
 def send(h,data,status=200,cookie=None):
-    out=json.dumps(data).encode('utf-8')
-    h.send_response(status)
-    h.send_header('Content-Type','application/json')
-    h.send_header('Content-Length',str(len(out)))
+    out=json.dumps(data).encode('utf-8');h.send_response(status);h.send_header('Content-Type','application/json');h.send_header('Content-Length',str(len(out)))
     if cookie:h.send_header('Set-Cookie',cookie)
-    h.end_headers()
-    h.wfile.write(out)
+    h.end_headers();h.wfile.write(out)
 
 def token(h):
     for item in h.headers.get('Cookie','').split(';'):
@@ -139,8 +87,7 @@ def token(h):
         if item.startswith('stella_session='):return item.split('=',1)[1]
     return None
 
-def current_user(h):
-    return get_user_from_session(token(h))
+def current_user(h):return get_user_from_session(token(h))
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -171,7 +118,6 @@ class Handler(BaseHTTPRequestHandler):
                 t=create_session(uid);send(self,{'success':True,'username':u},cookie='stella_session='+t+'; HttpOnly; Path=/; SameSite=Lax')
             except Exception as e:send(self,{'success':False,'error':str(e)},400)
             return
-
         if self.path=='/login':
             try:
                 d=body(self);u=d.get('username','').strip();p=d.get('password','');uid=verify_user(u,p)
@@ -179,71 +125,23 @@ class Handler(BaseHTTPRequestHandler):
                 t=create_session(uid);send(self,{'success':True,'username':u},cookie='stella_session='+t+'; HttpOnly; Path=/; SameSite=Lax')
             except Exception as e:send(self,{'success':False,'error':str(e)},401)
             return
-
         if self.path=='/logout':
             delete_session(token(self));send(self,{'success':True},cookie='stella_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');return
-
         if self.path=='/generate-image':
             uid=current_user(self)
-            if not uid:
-                send(self,{'error':'Please log in to generate images.'},401);return
+            if not uid:send(self,{'error':'Please log in to generate images.'},401);return
             try:
-                d=body(self)
-                prompt=d.get('prompt','').strip()
+                d=body(self);prompt=d.get('prompt','').strip()
                 if not prompt:raise ValueError('Image prompt cannot be empty.')
-                if not POLLINATIONS_API_KEY:
-                    send(self,{'error':'POLLINATIONS_API_KEY is not configured on the server.'},503);return
-
-                encoded_prompt=urllib.parse.quote(prompt,safe='')
-                image_url=(POLLINATIONS_IMAGE_URL+encoded_prompt+'?model='+urllib.parse.quote(POLLINATIONS_IMAGE_MODEL)+'&width=768&height=768')
-                req=urllib.request.Request(
-                    image_url,
-                    headers={
-                        'Authorization':'Bearer '+POLLINATIONS_API_KEY,
-                        'Accept':'image/jpeg,image/png,image/*',
-                        'User-Agent':'STELLA/2.0'
-                    },
-                    method='GET'
-                )
-
-                started=time.monotonic()
-                chunks=[]
-                total=0
-                max_bytes=12*1024*1024
-
-                with urllib.request.urlopen(req,timeout=45) as response:
-                    content_type=response.headers.get('Content-Type','image/jpeg').split(';',1)[0]
-                    if not content_type.startswith('image/'):
-                        error_text=response.read(2000).decode('utf-8','replace')
-                        raise ValueError('Pollinations returned a non-image response: '+error_text)
-
-                    while True:
-                        if time.monotonic()-started>90:
-                            raise TimeoutError('Pollinations image generation timed out.')
-                        chunk=response.read(65536)
-                        if not chunk:break
-                        total+=len(chunk)
-                        if total>max_bytes:
-                            raise ValueError('Generated image is too large.')
-                        chunks.append(chunk)
-
-                image_bytes=b''.join(chunks)
-                image_data='data:'+content_type+';base64,'+base64.b64encode(image_bytes).decode('ascii')
-                send(self,{'image_url':image_data})
-
-            except urllib.error.HTTPError as e:
-                try:
-                    detail=e.read(2000).decode('utf-8','replace')
-                except Exception:
-                    detail=str(e)
-                send(self,{'error':'Pollinations API error '+str(e.code)+': '+detail},502)
-            except Exception as e:
-                send(self,{'error':'Image generation failed: '+str(e)},500)
+                if not HF_TOKEN:send(self,{'error':'HF_TOKEN is not configured on the server.'},503);return
+                client=InferenceClient(provider='nscale',api_key=HF_TOKEN)
+                image=client.text_to_image(prompt,model=IMAGE_MODEL)
+                buffer=io.BytesIO();image.save(buffer,format='PNG');encoded=base64.b64encode(buffer.getvalue()).decode('ascii')
+                send(self,{'image_url':'data:image/png;base64,'+encoded,'model':IMAGE_MODEL})
+            except Exception as e:send(self,{'error':'Hugging Face image generation failed: '+str(e)},502)
             return
-
         if self.path!='/chat':
             self.send_response(404);self.end_headers();return
-
         uid=current_user(self)
         if not uid:send(self,{'reply':'Please log in to talk with STELLA.'},401);return
         try:
@@ -261,8 +159,7 @@ class Handler(BaseHTTPRequestHandler):
             reply=''
             for part in result['candidates'][0]['content']['parts']:
                 if not part.get('thought',False):reply=part.get('text','');break
-            add_message(cid,'model',reply)
-            send(self,{'reply':reply,'conversation_id':cid})
+            add_message(cid,'model',reply);send(self,{'reply':reply,'conversation_id':cid})
         except Exception as e:send(self,{'reply':'Something went wrong: '+str(e)},500)
 
 create_database()
