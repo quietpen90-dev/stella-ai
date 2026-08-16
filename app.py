@@ -1,6 +1,8 @@
 import os
 import json
+import base64
 import urllib.request
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from database import (
     create_database, create_user, hash_password, verify_user,
@@ -12,10 +14,10 @@ from database import (
 API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent"
 
-# Image generation is intentionally model-agnostic for now.
-# We will choose the image provider/model next.
-IMAGE_API_URL = os.environ.get("IMAGE_API_URL")
-IMAGE_API_KEY = os.environ.get("IMAGE_API_KEY")
+# Pollinations image generation
+POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY")
+POLLINATIONS_IMAGE_URL = "https://gen.pollinations.ai/image/"
+POLLINATIONS_IMAGE_MODEL = "flux"
 
 PERSONALITY = """
 You are STELLA, a 19-year-old university student and unique AI character. Your older sister is STAICY, a future AI.
@@ -83,36 +85,10 @@ async function loadConversation(id){let r=await fetch('/conversation?id='+encode
 function renderWelcome(){$('chat').innerHTML='<div class="message stella">Hey! I\'m STELLA 🌸<br>Nice to meet you! What are we doing today?</div>'}
 function newChat(){conversationId=null;localStorage.removeItem('stella_conversation_id');renderWelcome();$('message').focus()}
 function toggleTools(){$('plusMenu').classList.toggle('hidden')}
-function startImageGeneration(){
-    $('plusMenu').classList.add('hidden');
-    const prompt=window.prompt('What image should STELLA generate?');
-    if(!prompt||!prompt.trim())return;
-    generateImage(prompt.trim());
-}
-async function generateImage(prompt){
-    add('Generate an image: '+prompt,'user');
-    const status=add('Creating your image... 🎨','stella');
-    try{
-        const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt,conversation_id:conversationId})});
-        const d=await r.json();
-        if(r.status===401){location.reload();return}
-        if(!r.ok){status.textContent=d.error||'Image generation is not configured yet.';saveMessages();return}
-        status.remove();
-        showGeneratedImage(d.image_url,prompt);
-    }catch(e){status.textContent='Could not generate the image right now.';saveMessages()}
-}
-function showGeneratedImage(url,prompt){
-    const wrap=document.createElement('div');wrap.className='image-message';
-    const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;
-    const actions=document.createElement('div');actions.className='image-actions';
-    const download=document.createElement('a');download.href=url;download.download='stella-image.png';download.textContent='Download';download.target='_blank';
-    const ask=document.createElement('button');ask.textContent='Continue chatting';ask.onclick=()=>{$('message').focus()};
-    actions.appendChild(download);actions.appendChild(ask);wrap.appendChild(img);wrap.appendChild(actions);$('chat').appendChild(wrap);scroll();
-}
-async function sendMessage(){
-    let text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';let t=add('Thinking... ✨','stella');
-    try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})});let d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){t.textContent=d.reply||'Something went wrong.';saveMessages();return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);t.textContent=d.reply;saveMessages();await loadConversations()}catch(e){t.textContent='Oops! Something went wrong. 😅';saveMessages()}scroll()
-}
+function startImageGeneration(){$('plusMenu').classList.add('hidden');const prompt=window.prompt('What image should STELLA generate?');if(!prompt||!prompt.trim())return;generateImage(prompt.trim())}
+async function generateImage(prompt){add('Generate an image: '+prompt,'user');const status=add('Creating your image... 🎨','stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt,conversation_id:conversationId})});const d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){status.textContent=d.error||'Image generation failed.';saveMessages();return}status.remove();showGeneratedImage(d.image_url,prompt)}catch(e){status.textContent='Could not generate the image right now.';saveMessages()}}
+function showGeneratedImage(url,prompt){const wrap=document.createElement('div');wrap.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const actions=document.createElement('div');actions.className='image-actions';const download=document.createElement('a');download.href=url;download.download='stella-image.png';download.textContent='Download';download.target='_blank';const ask=document.createElement('button');ask.textContent='Continue chatting';ask.onclick=()=>{$('message').focus()};actions.appendChild(download);actions.appendChild(ask);wrap.appendChild(img);wrap.appendChild(actions);$('chat').appendChild(wrap);scroll()}
+async function sendMessage(){let text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';let t=add('Thinking... ✨','stella');try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})});let d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){t.textContent=d.reply||'Something went wrong.';saveMessages();return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);t.textContent=d.reply;saveMessages();await loadConversations()}catch(e){t.textContent='Oops! Something went wrong. 😅';saveMessages()}scroll()}
 function add(text,type,save=true){let m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);scroll();if(save)saveMessages();return m}
 function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
@@ -180,23 +156,33 @@ class Handler(BaseHTTPRequestHandler):
             delete_session(token(self));send(self,{'success':True},cookie='stella_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');return
         if self.path=='/generate-image':
             uid=current_user(self)
-            if not uid:send(self,{'error':'Please log in to generate images.'},401);return
+            if not uid:
+                send(self,{'error':'Please log in to generate images.'},401);return
             try:
-                d=body(self);prompt=d.get('prompt','').strip()
+                d=body(self)
+                prompt=d.get('prompt','').strip()
                 if not prompt:raise ValueError('Image prompt cannot be empty.')
-                if not IMAGE_API_URL:
-                    send(self,{'error':'Image generation UI is ready, but no image model is configured yet. We will connect the image model next.'},503);return
-                payload={'prompt':prompt}
-                headers={'Content-Type':'application/json'}
-                if IMAGE_API_KEY:headers['Authorization']='Bearer '+IMAGE_API_KEY
-                req=urllib.request.Request(IMAGE_API_URL,data=json.dumps(payload).encode('utf-8'),headers=headers,method='POST')
-                with urllib.request.urlopen(req,timeout=120) as r:result=json.loads(r.read().decode('utf-8'))
-                image_url=result.get('image_url') or result.get('url') or result.get('data')
-                if not image_url:raise ValueError('Image provider did not return an image URL.')
-                send(self,{'image_url':image_url})
-            except Exception as e:send(self,{'error':'Image generation failed: '+str(e)},500)
+                if not POLLINATIONS_API_KEY:
+                    send(self,{'error':'POLLINATIONS_API_KEY is not configured on the server.'},503);return
+
+                encoded_prompt=urllib.parse.quote(prompt,safe='')
+                image_url=(POLLINATIONS_IMAGE_URL+encoded_prompt+'?model='+urllib.parse.quote(POLLINATIONS_IMAGE_MODEL))
+                req=urllib.request.Request(
+                    image_url,
+                    headers={'Authorization':'Bearer '+POLLINATIONS_API_KEY},
+                    method='GET'
+                )
+                with urllib.request.urlopen(req,timeout=180) as response:
+                    image_bytes=response.read()
+                    content_type=response.headers.get('Content-Type','image/jpeg').split(';',1)[0]
+
+                image_data='data:'+content_type+';base64,'+base64.b64encode(image_bytes).decode('ascii')
+                send(self,{'image_url':image_data})
+            except Exception as e:
+                send(self,{'error':'Image generation failed: '+str(e)},500)
             return
-        if self.path!='/chat':self.send_response(404);self.end_headers();return
+        if self.path!='/chat':
+            self.send_response(404);self.end_headers();return
         uid=current_user(self)
         if not uid:send(self,{'reply':'Please log in to talk with STELLA.'},401);return
         try:
