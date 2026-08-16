@@ -1,9 +1,12 @@
 import os
 import json
 import base64
+import time
 import urllib.request
 import urllib.parse
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from database import (
     create_database, create_user, hash_password, verify_user,
     create_session, get_user_from_session, delete_session,
@@ -31,7 +34,10 @@ The goal is for users to feel that they are actually talking with STELLA. Be STE
 """
 
 HTML = r'''<!DOCTYPE html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>STELLA</title>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STELLA</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#f5f5f7;font-family:Arial,sans-serif;height:100vh;color:#222}
@@ -58,7 +64,9 @@ header{padding:12px 18px;background:#fff;border-bottom:1px solid #ddd;display:fl
 .image-actions{display:flex;gap:8px;margin-top:8px}.image-actions a,.image-actions button{border:0;border-radius:10px;padding:9px 12px;text-decoration:none;background:#eee;color:#222;font-size:14px}
 #chats{display:flex;gap:8px;padding:8px 12px;background:#fff;border-bottom:1px solid #ddd;overflow-x:auto}
 #chats button{white-space:nowrap;border:1px solid #ddd;background:#f5f5f7;border-radius:10px;padding:7px 10px}#newchat{background:#007aff!important;color:#fff;border:0!important}
-</style></head><body>
+</style>
+</head>
+<body>
 <div id="auth"><div class="card"><div class="logo">✦ STELLA 🌸</div><div class="sub" id="sub">Create your STELLA account</div><input id="username" placeholder="Username" autocomplete="username"><input id="password" type="password" placeholder="Password" autocomplete="current-password"><button onclick="auth()" id="authBtn">Create account</button><div class="error" id="error"></div><div class="switch" onclick="toggle()" id="switch">Already have an account? Log in</div></div></div>
 <div id="app" class="hidden"><header><div class="brand">✦ STELLA</div><div class="user"><span id="welcome"></span><button id="logout" onclick="logout()">Log out</button></div></header><div id="chats"><button id="newchat" onclick="newChat()">+ New chat</button></div><div id="chat"></div><div id="inputArea"><div style="position:relative"><button id="plus" onclick="toggleTools()">+</button><div id="plusMenu" class="hidden"><button class="tool" onclick="startImageGeneration()">🎨 Generate an image</button></div></div><input id="message" placeholder="Message STELLA..." autocomplete="off"><button id="send" onclick="sendMessage()">Send</button></div></div>
 <script>
@@ -86,13 +94,31 @@ function renderWelcome(){$('chat').innerHTML='<div class="message stella">Hey! I
 function newChat(){conversationId=null;localStorage.removeItem('stella_conversation_id');renderWelcome();$('message').focus()}
 function toggleTools(){$('plusMenu').classList.toggle('hidden')}
 function startImageGeneration(){$('plusMenu').classList.add('hidden');const prompt=window.prompt('What image should STELLA generate?');if(!prompt||!prompt.trim())return;generateImage(prompt.trim())}
-async function generateImage(prompt){add('Generate an image: '+prompt,'user');const status=add('Creating your image... 🎨','stella');try{const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt,conversation_id:conversationId})});const d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){status.textContent=d.error||'Image generation failed.';saveMessages();return}status.remove();showGeneratedImage(d.image_url,prompt)}catch(e){status.textContent='Could not generate the image right now.';saveMessages()}}
+async function generateImage(prompt){
+    add('Generate an image: '+prompt,'user');
+    const status=add('Creating your image... 🎨','stella');
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),150000);
+    try{
+        const r=await fetch('/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt,conversation_id:conversationId}),signal:controller.signal});
+        const d=await r.json();
+        if(r.status===401){location.reload();return}
+        if(!r.ok){status.textContent=d.error||'Image generation failed.';saveMessages();return}
+        status.remove();
+        showGeneratedImage(d.image_url,prompt);
+    }catch(e){
+        status.textContent=e.name==='AbortError'?'Image generation timed out. Please try again.':'Could not generate the image right now.';
+        saveMessages();
+    }finally{clearTimeout(timer)}
+}
 function showGeneratedImage(url,prompt){const wrap=document.createElement('div');wrap.className='image-message';const img=document.createElement('img');img.className='generated-image';img.src=url;img.alt=prompt;const actions=document.createElement('div');actions.className='image-actions';const download=document.createElement('a');download.href=url;download.download='stella-image.png';download.textContent='Download';download.target='_blank';const ask=document.createElement('button');ask.textContent='Continue chatting';ask.onclick=()=>{$('message').focus()};actions.appendChild(download);actions.appendChild(ask);wrap.appendChild(img);wrap.appendChild(actions);$('chat').appendChild(wrap);scroll()}
 async function sendMessage(){let text=$('message').value.trim();if(!text)return;add(text,'user');$('message').value='';let t=add('Thinking... ✨','stella');try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:conversationId})});let d=await r.json();if(r.status===401){location.reload();return}if(!r.ok){t.textContent=d.reply||'Something went wrong.';saveMessages();return}conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);t.textContent=d.reply;saveMessages();await loadConversations()}catch(e){t.textContent='Oops! Something went wrong. 😅';saveMessages()}scroll()}
 function add(text,type,save=true){let m=document.createElement('div');m.className='message '+type;m.textContent=text;$('chat').appendChild(m);scroll();if(save)saveMessages();return m}
 function scroll(){$('chat').scrollTop=$('chat').scrollHeight}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage()});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
-</script></body></html>'''
+</script>
+</body>
+</html>'''
 
 def body(h):
     n=int(h.headers.get('Content-Length',0))
@@ -145,6 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                 t=create_session(uid);send(self,{'success':True,'username':u},cookie='stella_session='+t+'; HttpOnly; Path=/; SameSite=Lax')
             except Exception as e:send(self,{'success':False,'error':str(e)},400)
             return
+
         if self.path=='/login':
             try:
                 d=body(self);u=d.get('username','').strip();p=d.get('password','');uid=verify_user(u,p)
@@ -152,8 +179,10 @@ class Handler(BaseHTTPRequestHandler):
                 t=create_session(uid);send(self,{'success':True,'username':u},cookie='stella_session='+t+'; HttpOnly; Path=/; SameSite=Lax')
             except Exception as e:send(self,{'success':False,'error':str(e)},401)
             return
+
         if self.path=='/logout':
             delete_session(token(self));send(self,{'success':True},cookie='stella_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');return
+
         if self.path=='/generate-image':
             uid=current_user(self)
             if not uid:
@@ -166,23 +195,55 @@ class Handler(BaseHTTPRequestHandler):
                     send(self,{'error':'POLLINATIONS_API_KEY is not configured on the server.'},503);return
 
                 encoded_prompt=urllib.parse.quote(prompt,safe='')
-                image_url=(POLLINATIONS_IMAGE_URL+encoded_prompt+'?model='+urllib.parse.quote(POLLINATIONS_IMAGE_MODEL))
+                image_url=(POLLINATIONS_IMAGE_URL+encoded_prompt+'?model='+urllib.parse.quote(POLLINATIONS_IMAGE_MODEL)+'&width=768&height=768')
                 req=urllib.request.Request(
                     image_url,
-                    headers={'Authorization':'Bearer '+POLLINATIONS_API_KEY},
+                    headers={
+                        'Authorization':'Bearer '+POLLINATIONS_API_KEY,
+                        'Accept':'image/jpeg,image/png,image/*',
+                        'User-Agent':'STELLA/2.0'
+                    },
                     method='GET'
                 )
-                with urllib.request.urlopen(req,timeout=180) as response:
-                    image_bytes=response.read()
-                    content_type=response.headers.get('Content-Type','image/jpeg').split(';',1)[0]
 
+                started=time.monotonic()
+                chunks=[]
+                total=0
+                max_bytes=12*1024*1024
+
+                with urllib.request.urlopen(req,timeout=45) as response:
+                    content_type=response.headers.get('Content-Type','image/jpeg').split(';',1)[0]
+                    if not content_type.startswith('image/'):
+                        error_text=response.read(2000).decode('utf-8','replace')
+                        raise ValueError('Pollinations returned a non-image response: '+error_text)
+
+                    while True:
+                        if time.monotonic()-started>90:
+                            raise TimeoutError('Pollinations image generation timed out.')
+                        chunk=response.read(65536)
+                        if not chunk:break
+                        total+=len(chunk)
+                        if total>max_bytes:
+                            raise ValueError('Generated image is too large.')
+                        chunks.append(chunk)
+
+                image_bytes=b''.join(chunks)
                 image_data='data:'+content_type+';base64,'+base64.b64encode(image_bytes).decode('ascii')
                 send(self,{'image_url':image_data})
+
+            except urllib.error.HTTPError as e:
+                try:
+                    detail=e.read(2000).decode('utf-8','replace')
+                except Exception:
+                    detail=str(e)
+                send(self,{'error':'Pollinations API error '+str(e.code)+': '+detail},502)
             except Exception as e:
                 send(self,{'error':'Image generation failed: '+str(e)},500)
             return
+
         if self.path!='/chat':
             self.send_response(404);self.end_headers();return
+
         uid=current_user(self)
         if not uid:send(self,{'reply':'Please log in to talk with STELLA.'},401);return
         try:
