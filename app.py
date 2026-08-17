@@ -35,7 +35,7 @@ body.dark,#auth.dark{background:#000;color:#fff}body.dark header,body.dark #side
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalBox"><div class="modalHead"><h2 id="modalTitle"></h2><button class="close" onclick="closeModal()">Close</button></div><div id="modalBody"></div></div></div>
 <section id="call" class="hidden"><div class="orb">✦</div><h2>STELLA</h2><div id="callStatus">Connecting...</div><div id="callTimer">00:00</div><button class="endCall" onclick="endCall()">×</button></section></div>
 <script>
-let loginMode=false,conversationId=localStorage.getItem('stella_conversation_id'),galleryItems=[],plugins=%s,callId=null,callStarted=0,timer=null;
+let loginMode=false,conversationId=localStorage.getItem('stella_conversation_id'),galleryItems=[],plugins=__PLUGIN_DATA__,callId=null,callStarted=0,timer=null;
 const $=id=>document.getElementById(id),esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function toggleAuth(){loginMode=!loginMode;$('authSub').textContent=loginMode?'Log in to your account':'Create your account';$('authBtn').textContent=loginMode?'Log in':'Create account';$('authSwitch').textContent=loginMode?'Need an account? Create one':'Already have an account? Log in'}
 async function auth(){let u=$('username').value.trim(),p=$('password').value;if(!u||!p){$('authErr').textContent='Username and password are required.';return}let r=await fetch(loginMode?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})}),d=await r.json();if(!r.ok){$('authErr').textContent=d.error||'Unable to continue.';return}show(d.username||u)}
