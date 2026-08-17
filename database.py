@@ -17,7 +17,11 @@ def create_database():
     cursor = connection.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     cursor.execute("CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, attachment TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE)")
+    # Existing databases pre-v3.2.6 do not have the attachment column.
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(messages)").fetchall()}
+    if "attachment" not in columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN attachment TEXT")
     cursor.execute("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
     cursor.execute("CREATE TABLE IF NOT EXISTS voice_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, conversation_id INTEGER NOT NULL, provider TEXT, provider_session_id TEXT, status TEXT NOT NULL DEFAULT 'active', started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, ended_at TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE)")
     cursor.execute("CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, theme TEXT NOT NULL DEFAULT 'system', memory_enabled INTEGER NOT NULL DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
@@ -83,20 +87,43 @@ def get_conversations(user_id):
     return [{"id":r[0],"title":r[1] or "New chat","created_at":r[2],"updated_at":r[3]} for r in rows]
 
 
+def set_conversation_title(conversation_id, title):
+    connection = get_connection(); connection.execute("UPDATE conversations SET title=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (title[:100], conversation_id)); connection.commit(); connection.close()
+
+
 def user_owns_conversation(user_id, conversation_id):
     connection = get_connection(); row = connection.execute("SELECT 1 FROM conversations WHERE id = ? AND user_id = ?", (conversation_id,user_id)).fetchone(); connection.close(); return row is not None
 
 
-def add_message(conversation_id, role, content):
-    connection = get_connection(); connection.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)", (conversation_id,role,content)); connection.execute("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,)); connection.commit(); connection.close()
+def add_message(conversation_id, role, content, attachment=None):
+    connection = get_connection()
+    connection.execute("INSERT INTO messages (conversation_id, role, content, attachment) VALUES (?, ?, ?, ?)", (conversation_id, role, content, json.dumps(attachment, separators=(",", ":")) if attachment else None))
+    connection.execute("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,))
+    connection.commit(); connection.close()
 
 
 def get_messages(conversation_id):
-    connection = get_connection(); rows = connection.execute("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC", (conversation_id,)).fetchall(); connection.close(); return [{"role":r[0],"parts":[{"text":r[1]}]} for r in rows]
+    connection = get_connection(); rows = connection.execute("SELECT role, content, attachment FROM messages WHERE conversation_id = ? ORDER BY id ASC", (conversation_id,)).fetchall(); connection.close()
+    result=[]
+    for role,content,attachment in rows:
+        item={"role":role,"parts":[{"text":content}]}
+        if attachment:
+            try: item["attachment"]=json.loads(attachment)
+            except Exception: item["attachment"]={}
+        result.append(item)
+    return result
 
 
 def get_user_memory_messages(user_id, limit=40):
-    connection=get_connection(); rows=connection.execute("SELECT m.role,m.content,m.created_at,c.id,c.title FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.user_id=? AND m.role IN ('user','model','image','video','voice_call') ORDER BY m.id DESC LIMIT ?",(user_id,limit)).fetchall(); connection.close(); rows=list(reversed(rows)); return [{"role":r[0],"content":r[1],"created_at":r[2],"conversation_id":r[3],"conversation_title":r[4] or "New chat"} for r in rows]
+    connection=get_connection(); rows=connection.execute("SELECT m.role,m.content,m.attachment,m.created_at,c.id,c.title FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.user_id=? AND m.role IN ('user','model','image','video','attachment','voice_call') ORDER BY m.id DESC LIMIT ?",(user_id,limit)).fetchall(); connection.close()
+    rows=list(reversed(rows)); result=[]
+    for role,content,attachment,created_at,cid,title in rows:
+        item={"role":role,"content":content,"created_at":created_at,"conversation_id":cid,"conversation_title":title or "New chat"}
+        if attachment:
+            try:item["attachment"]=json.loads(attachment)
+            except Exception:item["attachment"]={}
+        result.append(item)
+    return result
 
 
 def get_user_settings(user_id):
@@ -111,16 +138,20 @@ def update_user_settings(user_id, theme=None, memory_enabled=None):
 
 
 def get_media_gallery(user_id):
-    connection=get_connection(); rows=connection.execute("SELECT m.role,m.content,m.created_at,c.id,c.title FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.user_id=? AND m.role IN ('image','video') ORDER BY m.id DESC",(user_id,)).fetchall(); connection.close(); items=[]
-    for role,content,created_at,cid,title in rows:
-        try: data=json.loads(content)
-        except Exception: data={"url":content}
-        items.append({"type":role,"url":data.get("url"),"prompt":data.get("prompt",""),"created_at":created_at,"conversation_id":cid,"conversation_title":title or "New chat"})
+    connection=get_connection(); rows=connection.execute("SELECT m.role,m.content,m.attachment,m.created_at,c.id,c.title FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.user_id=? ORDER BY m.id DESC",(user_id,)).fetchall(); connection.close(); items=[]
+    for role,content,attachment,created_at,cid,title in rows:
+        data=None
+        if attachment:
+            try:data=json.loads(attachment)
+            except Exception:data=None
+        if data and data.get("type") in ("image","video"):
+            items.append({"type":data.get("type"),"url":data.get("data"),"name":data.get("name","Attachment"),"prompt":"Uploaded media","created_at":created_at,"conversation_id":cid,"conversation_title":title or "New chat"})
+            continue
+        if role in ("image","video"):
+            try:data=json.loads(content)
+            except Exception:data={"url":content}
+            items.append({"type":role,"url":data.get("url"),"prompt":data.get("prompt",""),"created_at":created_at,"conversation_id":cid,"conversation_title":title or "New chat"})
     return items
-
-
-def set_conversation_title(conversation_id,title):
-    connection=get_connection(); connection.execute("UPDATE conversations SET title=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(title[:100],conversation_id)); connection.commit(); connection.close()
 
 
 def delete_conversation(user_id,conversation_id):
