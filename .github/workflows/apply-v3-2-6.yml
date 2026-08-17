@@ -1,0 +1,29 @@
+name: Apply STELLA v3.2.6 patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: python tools/apply_v3_2_6_patch.py
+      - name: Validate Python
+        run: python -m py_compile app.py database.py
+      - name: Commit live patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f tools/apply_v3_2_6_patch.py .github/workflows/apply-v3-2-6.yml
+          git add app.py database.py
+          git diff --check
+          git diff --cached --quiet && echo 'No changes produced' && exit 0 || true
+          git commit -m 'Patch STELLA v3.2.6 UI media memory and update log'
+          git push
