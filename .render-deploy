@@ -1,1 +1,3 @@
-STELLA deployment marker. The HTML template in app.py uses placeholder replacement instead of Python percent formatting.
+STELLA deployment marker.
+Force a fresh Render deployment from main after the v3.2.6 merge.
+Current source commit: 06772936a02a1097e312d95d0c4e537736268c4a
