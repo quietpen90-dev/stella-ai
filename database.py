@@ -70,6 +70,15 @@ def create_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            theme TEXT NOT NULL DEFAULT 'system',
+            memory_enabled INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
     connection.commit()
     connection.close()
 
@@ -93,8 +102,13 @@ def create_user(username, password_hash):
             "INSERT INTO users (username, password) VALUES (?, ?)",
             (username, password_hash)
         )
+        user_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)",
+            (user_id,)
+        )
         connection.commit()
-        return cursor.lastrowid
+        return user_id
     except sqlite3.IntegrityError:
         return None
     finally:
@@ -256,6 +270,109 @@ def get_messages(conversation_id):
         {"role": role, "parts": [{"text": content}]}
         for role, content in rows
     ]
+
+
+def get_user_memory_messages(user_id, limit=40):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT m.role, m.content, m.created_at, c.id, c.title
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.user_id = ?
+          AND m.role IN ('user', 'model', 'image', 'voice_call')
+        ORDER BY m.id DESC
+        LIMIT ?
+        """,
+        (user_id, limit)
+    )
+    rows = list(reversed(cursor.fetchall()))
+    connection.close()
+    return [
+        {
+            "role": r[0],
+            "content": r[1],
+            "created_at": r[2],
+            "conversation_id": r[3],
+            "conversation_title": r[4] or "New chat"
+        }
+        for r in rows
+    ]
+
+
+def get_user_settings(user_id):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT theme, memory_enabled FROM user_settings WHERE user_id = ?",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        cursor.execute(
+            "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)",
+            (user_id,)
+        )
+        connection.commit()
+        theme, memory_enabled = "system", 1
+    else:
+        theme, memory_enabled = row
+    connection.close()
+    return {"theme": theme, "memory_enabled": bool(memory_enabled)}
+
+
+def update_user_settings(user_id, theme=None, memory_enabled=None):
+    current = get_user_settings(user_id)
+    theme = theme if theme in ("system", "light", "dark") else current["theme"]
+    if memory_enabled is None:
+        memory_enabled = current["memory_enabled"]
+    connection = get_connection()
+    connection.execute(
+        """
+        INSERT INTO user_settings (user_id, theme, memory_enabled)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            theme = excluded.theme,
+            memory_enabled = excluded.memory_enabled
+        """,
+        (user_id, theme, 1 if memory_enabled else 0)
+    )
+    connection.commit()
+    connection.close()
+    return {"theme": theme, "memory_enabled": bool(memory_enabled)}
+
+
+def get_media_gallery(user_id):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT m.role, m.content, m.created_at, c.id, c.title
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.user_id = ? AND m.role IN ('image', 'video')
+        ORDER BY m.id DESC
+        """,
+        (user_id,)
+    )
+    rows = cursor.fetchall()
+    connection.close()
+    items = []
+    for role, content, created_at, conversation_id, title in rows:
+        try:
+            data = json.loads(content)
+        except Exception:
+            data = {"url": content}
+        items.append({
+            "type": role,
+            "url": data.get("url"),
+            "prompt": data.get("prompt", ""),
+            "created_at": created_at,
+            "conversation_id": conversation_id,
+            "conversation_title": title or "New chat"
+        })
+    return items
 
 
 def set_conversation_title(conversation_id, title):
