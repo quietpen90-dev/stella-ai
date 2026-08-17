@@ -73,7 +73,7 @@ async function loadGallery(){let r=await fetch('/memory/gallery'),d=await r.json
 async function startVoiceCall(){closeQuick();closeModal();let r=await fetch('/voice/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:conversationId})}),d=await r.json();if(!r.ok){add(d.error||'Voice call could not start.','stella');return}callId=d.call_id;conversationId=String(d.conversation_id);localStorage.setItem('stella_conversation_id',conversationId);callStarted=Date.now();$('call').classList.remove('hidden');$('callStatus').textContent='Voice session ready';timer=setInterval(()=>{$('callTimer').textContent=fmt(Math.floor((Date.now()-callStarted)/1000))},1000)}function fmt(s){return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}async function endCall(){let duration=Math.floor((Date.now()-callStarted)/1000);clearInterval(timer);$('call').classList.add('hidden');if(callId){await fetch('/voice/end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,duration})});add('Voice call • '+fmt(duration),'stella',true).parentElement.classList.add('no-copy')}callId=null;loadHistory()}
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});$('password').addEventListener('keydown',e=>{if(e.key==='Enter')auth()});check();
 </script></body></html>'''
-HTML=HTML%json.dumps(PLUGINS,separators=(',',':'))
+HTML=HTML.replace('__PLUGIN_DATA__',json.dumps(PLUGINS,separators=(',',':')))
 
 def read_json(h):
  n=int(h.headers.get('Content-Length',0));return json.loads(h.rfile.read(n).decode())
