@@ -1,0 +1,1 @@
+STELLA deployment marker. The HTML template in app.py uses placeholder replacement instead of Python percent formatting.
